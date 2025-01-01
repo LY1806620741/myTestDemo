@@ -4,20 +4,18 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.dangdang.ddframe.job.config.JobCoreConfiguration;
 import com.dangdang.ddframe.job.config.simple.SimpleJobConfiguration;
-import com.dangdang.ddframe.job.executor.ShardingContexts;
-import com.dangdang.ddframe.job.lite.api.JobScheduler;
-import com.dangdang.ddframe.job.lite.api.listener.ElasticJobListener;
 import com.dangdang.ddframe.job.lite.config.LiteJobConfiguration;
 import com.dangdang.ddframe.job.lite.internal.schedule.JobRegistry;
 import com.dangdang.ddframe.job.lite.spring.api.SpringJobScheduler;
 import com.dangdang.ddframe.job.reg.base.CoordinatorRegistryCenter;
-import jakarta.annotation.PostConstruct;
 import lombok.extern.log4j.Log4j2;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.curator.framework.recipes.cache.PathChildrenCache;
 import org.apache.curator.framework.recipes.cache.PathChildrenCacheListener;
-import org.springframework.beans.factory.InitializingBean;
+import org.quartz.*;
+import org.quartz.impl.matchers.GroupMatcher;
+import org.quartz.spi.OperableTrigger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -44,6 +42,9 @@ public class WebController implements CommandLineRunner {
     @Autowired
     MySimpleJob mySimpleJob;
 
+    @Autowired
+    Scheduler scheduler;
+
     HashMap<String,SpringJobScheduler> passiveMap;
 
     HashMap<String,SpringJobScheduler> activeMap;
@@ -62,24 +63,51 @@ public class WebController implements CommandLineRunner {
             }
             JSONObject jsonObject = JSON.parseObject(s);
             log.info("加载任务 {}",s);
-            JobCoreConfiguration coreConfig = JobCoreConfiguration.newBuilder(jsonObject.getString("jobName"), jsonObject.getString("cron"), jsonObject.getInteger("shardingTotalCount")).shardingItemParameters(jsonObject.getString("shardingItemParameters")).build();
-            SimpleJobConfiguration simpleJobConfig = new SimpleJobConfiguration(coreConfig, jsonObject.getString("jobClass"));
-            try {
-                new SpringJobScheduler(mySimpleJob, regCenter, LiteJobConfiguration.newBuilder(simpleJobConfig).build()).init();
-            } catch (Exception ex) {
-                if (ex.getMessage().endsWith("will never fire.")) {
-                    log.info("{} 过时了，尝试触发并删除",jobName);
-                    try {
-                        JobRegistry.getInstance().getJobScheduleController(jobName).triggerJob(); //触发时不存在
-                    } catch (Exception exc) {
-                        log.error(exc);
+            if (null!=JobRegistry.getInstance().getJobInstance(jobName)){
+                //fix是
+                try {
+//                    TriggerKey triggerKey = TriggerKey.triggerKey(jobName, TriggerKey.DEFAULT_GROUP);
+//                    OperableTrigger trigger = (OperableTrigger) scheduler.getTrigger(triggerKey);
+//                    trigger.validate();
+                    //org.quartz.core.QuartzScheduler.rescheduleJob
+                    JobRegistry.getInstance().getJobScheduleController(jobName).rescheduleJob(jsonObject.getString("cron"));
+                    log.error("存在不处理的job {}",jobName);
+                } catch (Exception ex) {
+                    if (ex.getMessage().endsWith("will never fire.")) {
+                        log.info(log.getMessageFactory().newMessage("{} 过时了，尝试触发并删除", jobName),ex);
+                        try {
+                            JobRegistry.getInstance().getJobScheduleController(jobName).triggerJob(); //触发时不存在
+                        } catch (Exception exc) {
+                            log.error(exc);
+                        }
+                        JobRegistry.getInstance().shutdown(jobName);
+                        regCenter.remove("/" + jobName);
+                    } else {
+                        JobRegistry.getInstance().shutdown(jobName);
+                        regCenter.remove("/" + jobName);
+                        log.error("未知异常", ex);
                     }
-                    JobRegistry.getInstance().shutdown(jobName);
-                    regCenter.remove("/" + jobName);
-                }else{
-                    JobRegistry.getInstance().shutdown(jobName);
-                    regCenter.remove("/" + jobName);
-                    log.error("未知异常",ex);
+                }
+            }else {
+                JobCoreConfiguration coreConfig = JobCoreConfiguration.newBuilder(jsonObject.getString("jobName"), jsonObject.getString("cron"), jsonObject.getInteger("shardingTotalCount")).shardingItemParameters(jsonObject.getString("shardingItemParameters")).build();
+                SimpleJobConfiguration simpleJobConfig = new SimpleJobConfiguration(coreConfig, jsonObject.getString("jobClass"));
+                try {
+                    new SpringJobScheduler(mySimpleJob, regCenter, LiteJobConfiguration.newBuilder(simpleJobConfig).build(), mySimpleJob).init();
+                } catch (Exception ex) {
+                    if (ex.getMessage().endsWith("will never fire.")) {
+                        log.info(log.getMessageFactory().newMessage("{} 过时了，尝试触发并删除", jobName),ex);
+                        try {
+                            JobRegistry.getInstance().getJobScheduleController(jobName).triggerJob(); //触发时不存在
+                        } catch (Exception exc) {
+                            log.error(exc);
+                        }
+                        JobRegistry.getInstance().shutdown(jobName);
+                        regCenter.remove("/" + jobName);
+                    } else {
+                        JobRegistry.getInstance().shutdown(jobName);
+                        regCenter.remove("/" + jobName);
+                        log.error("未知异常", ex);
+                    }
                 }
             }
         });
@@ -100,28 +128,28 @@ public class WebController implements CommandLineRunner {
             ChildData data = event.getData();
             switch (event.getType()) {
                 case CHILD_ADDED:
-                    String config = new String(client1.getData().forPath(data.getPath() + "/config"));
-                    JSONObject jsonObject = JSON.parseObject(config);
-                    String jobName = jsonObject.getString("jobName");
                     try {
+                        String config = new String(client1.getData().forPath(data.getPath() + "/config"));
+                        JSONObject jsonObject = JSON.parseObject(config);
+                        String jobName = jsonObject.getString("jobName");
 
                         if (null == JobRegistry.getInstance().getJobInstance(jobName)) {
 //                        if (null == JobRegistry.getInstance().getJobScheduleController(jobName)) {//因为elasticJob先注册zk再启动job，所以这个不能检测本机是否启动了任务无效
-                            log.info("{} 启动，且未检测到本机包含该任务，尝试从本机也启动",jobName);
+                            log.info("{} 启动，且未检测到本机包含该任务，尝试从本机也启动, cron {}",jobName,jsonObject.getString("cron"));
                             JobCoreConfiguration coreConfig = JobCoreConfiguration.newBuilder(jobName, jsonObject.getString("cron"), jsonObject.getInteger("shardingTotalCount")).shardingItemParameters(jsonObject.getString("shardingItemParameters")).build();
                             SimpleJobConfiguration simpleJobConfig = new SimpleJobConfiguration(coreConfig, jsonObject.getString("jobClass"));
-                            new SpringJobScheduler(mySimpleJob, regCenter, LiteJobConfiguration.newBuilder(simpleJobConfig).build()).init();
+                            new SpringJobScheduler(mySimpleJob, regCenter, LiteJobConfiguration.newBuilder(simpleJobConfig).build(),mySimpleJob).init();
                         }
                     } catch (Exception e) {
-                        log.error("监听到任务服务被创建",e);
+                        log.error("监听到任务服务被创建,但跟随创建失败",e); //创建后立马执行的任务可能会失败
                     }
                     break;
                 case CHILD_REMOVED:
-                    jobName = data.getPath().substring(1);
+                    String jobName = data.getPath().substring(1);
                     if (null != JobRegistry.getInstance().getJobScheduleController(jobName)) {
                         log.info("{} 被其他移除，尝试从本机注销",jobName);
                         JobRegistry.getInstance().shutdown(jobName);
-                        regCenter.remove("/" + jobName);
+                        regCenter.remove("/" + jobName); //可能会被其他服务删除
                     }
 
                 default:
@@ -142,36 +170,38 @@ public class WebController implements CommandLineRunner {
     @GetMapping("/start/{id}")
     public Mono<String> start(@PathVariable("id") Integer id) {
         String jobName = "javaSimpleJob" + id;
-        log.info("主动创建任务{}",jobName);
+        String cron = getCron(Date.from(Instant.now().plus(random.nextInt(10) - 2, ChronoUnit.SECONDS)));
+        log.info("主动创建任务{} cron{}",jobName,cron);
 //        CoordinatorRegistryCenter regCenter = JobRegistry.getInstance().getRegCenter("/");
         JobCoreConfiguration coreConfig = JobCoreConfiguration
 //                .newBuilder(jobName, getCron(Date.from(Instant.now().plus(random.nextInt(180) - 40, ChronoUnit.SECONDS))), 1)
-                .newBuilder(jobName, getCron(Date.from(Instant.now().plus(random.nextInt(10) - 2, ChronoUnit.SECONDS))), 1)
+                .newBuilder(jobName,cron , 1)
                 .shardingItemParameters("0=Beijing,1=Shanghai,2=Guangzhou")
                 .description("简介")
-                .jobParameter(random.nextInt(3)>2?"二阶段":"一阶段")
+//                .jobParameter(random.nextInt(3)>2?"二阶段":"一阶段")
+                .jobParameter("二阶段")
                 .build();
         SimpleJobConfiguration simpleJobConfig = new SimpleJobConfiguration(coreConfig, MySimpleJob.class.getCanonicalName());
         try {
-            new SpringJobScheduler(mySimpleJob, regCenter, LiteJobConfiguration.newBuilder(simpleJobConfig).build(), new ElasticJobListener() {
-                @Override
-                public void beforeJobExecuted(ShardingContexts shardingContexts) {
-
-                }
-
-                @Override
-                public void afterJobExecuted(ShardingContexts shardingContexts) {
-                    log.info("{} 任务结束后删除自身",shardingContexts.getJobName());
-                    regCenter.remove("/" + jobName);
-                }
-            }).init();
+            new SpringJobScheduler(mySimpleJob, regCenter, LiteJobConfiguration.newBuilder(simpleJobConfig).overwrite(true).build(), mySimpleJob).init();
         } catch (Exception ex) {
             if (ex.getMessage().endsWith("will never fire.")) {
+                log.warn("创建时便过期,直接触发并删除该任务");
+                try {
+                    JobRegistry.getInstance().getJobScheduleController(jobName).triggerJob();
+                } catch (Exception exc) {
+                    log.error(exc);
+                }
                 JobRegistry.getInstance().shutdown(jobName);
                 regCenter.remove("/" + jobName);
+                try {
+                    log.info("剩下 {}",scheduler.getJobKeys(GroupMatcher.anyGroup()));
+                } catch (SchedulerException ignore) {
+
+                }
 
             }else {
-                throw new RuntimeException(ex);
+                log.error(ex);
             }
         }
         return Mono.just("");
@@ -191,6 +221,12 @@ public class WebController implements CommandLineRunner {
     @GetMapping("/")
     public Mono<String> index() {
         return Mono.just("hello");
+    }
+
+    @GetMapping("/fix") //修复脏数据
+    public Mono<String> fix() {
+        init();
+        return Mono.just("fix");
     }
 
     public void print(String str) {
