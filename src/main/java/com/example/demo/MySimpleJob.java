@@ -32,6 +32,8 @@ public class MySimpleJob implements SimpleJob, ElasticJobListener {
 
     @Override
     public void execute(ShardingContext shardingContext) {
+        log.info("[{}] execute ",shardingContext.getJobName());
+
         try {
             webController.print(shardingContext.getJobName());
         } catch (Exception e) {
@@ -46,7 +48,11 @@ public class MySimpleJob implements SimpleJob, ElasticJobListener {
 
     @Override
     public void afterJobExecuted(ShardingContexts shardingContexts) {
+        //TODO afterJobExecuted会在所有集群调用
+        log.info("{} afterJobExecuted ",shardingContexts.getJobName());
+
         if (shardingContexts.getJobParameter().startsWith("二")){
+//        if (shardingContexts.getJobParameter().startsWith("二")&&random.nextInt(10)>5){
                 String cron = getCron(Date.from(Instant.now().plus(random.nextInt(10)+2, ChronoUnit.SECONDS)));
             log.info("{} 进入二阶段 下次调度 {} ",shardingContexts.getJobName(),cron);
             String id = shardingContexts.getJobName().replace("javaSimpleJob", "");
