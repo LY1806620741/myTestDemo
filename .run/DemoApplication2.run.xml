@@ -2,7 +2,7 @@
   <configuration default="false" name="DemoApplication2" type="Application" factoryName="Application" nameIsGenerated="true">
     <option name="MAIN_CLASS_NAME" value="com.example.demo.DemoApplication2" />
     <module name="demo" />
-    <option name="PROGRAM_PARAMETERS" value="--server.port=8081" />
+    <option name="PROGRAM_PARAMETERS" value="--server.port=8082" />
     <extension name="coverage">
       <pattern>
         <option name="PATTERN" value="com.example.demo.*" />

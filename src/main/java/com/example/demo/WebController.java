@@ -8,6 +8,7 @@ import com.dangdang.ddframe.job.lite.config.LiteJobConfiguration;
 import com.dangdang.ddframe.job.lite.internal.config.ConfigurationService;
 import com.dangdang.ddframe.job.lite.internal.schedule.JobRegistry;
 import com.dangdang.ddframe.job.lite.internal.schedule.JobScheduleController;
+import com.dangdang.ddframe.job.lite.internal.schedule.LiteJobFacade;
 import com.dangdang.ddframe.job.lite.internal.schedule.SchedulerFacade;
 import com.dangdang.ddframe.job.lite.spring.api.SpringJobScheduler;
 import com.dangdang.ddframe.job.reg.base.CoordinatorRegistryCenter;
@@ -16,11 +17,13 @@ import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.curator.framework.recipes.cache.PathChildrenCache;
 import org.apache.curator.framework.recipes.cache.PathChildrenCacheListener;
+import org.apache.zookeeper.data.Stat;
 import org.quartz.*;
 import org.quartz.impl.matchers.GroupMatcher;
 import org.quartz.spi.OperableTrigger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.util.ReflectionUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
@@ -69,9 +72,9 @@ public class WebController implements CommandLineRunner {
                     }
                     JSONObject jsonObject = JSON.parseObject(s);
                     log.info("加载任务 {}", s);
+                    //todo 当前存在的任务，可能检测不出永远不会调度
                     //org.quartz.core.QuartzScheduler.rescheduleJob
                     JobRegistry.getInstance().getJobScheduleController(jobName).rescheduleJob(jsonObject.getString("cron"));
-                    log.error("存在不处理的job {}", jobName);
                 } catch (Exception ex) {
                     if (ex.getMessage().endsWith("will never fire.")) {
                         log.info(log.getMessageFactory().newMessage("{} 过时了，尝试触发并删除", jobName), ex);
@@ -128,6 +131,10 @@ public class WebController implements CommandLineRunner {
             switch (event.getType()) {
                 case CHILD_ADDED:
                     try {
+                        Stat stat = client1.checkExists().forPath(data.getPath() + "/config");
+                        if (null == stat){
+                            return;
+                        }
                         String config = new String(client1.getData().forPath(data.getPath() + "/config"));
                         JSONObject jsonObject = JSON.parseObject(config);
                         String jobName = jsonObject.getString("jobName");
@@ -170,13 +177,14 @@ public class WebController implements CommandLineRunner {
     public Mono<String> start(@PathVariable("id") Integer id) {
         //TODO 创建后如果在创建之后没有调度，会漏掉
         String jobName = "javaSimpleJob" + id;
-        String cron = getCron(Date.from(Instant.now().plus(random.nextInt(10) - 2, ChronoUnit.SECONDS)));
+//        String cron = getCron(Date.from(Instant.now().plus(random.nextInt(10) - 2, ChronoUnit.SECONDS)));
+        String cron = getCron(Date.from(Instant.now().plus(0, ChronoUnit.SECONDS)));
         log.info("主动创建任务{} cron{}", jobName, cron);
 //        CoordinatorRegistryCenter regCenter = JobRegistry.getInstance().getRegCenter("/");
         JobCoreConfiguration coreConfig = JobCoreConfiguration
 //                .newBuilder(jobName, getCron(Date.from(Instant.now().plus(random.nextInt(180) - 40, ChronoUnit.SECONDS))), 1)
                 .newBuilder(jobName, cron, 1)
-                .shardingItemParameters("0=Beijing,1=Shanghai,2=Guangzhou")
+//                .shardingItemParameters("0=Beijing,1=Shanghai,2=Guangzhou")
                 .description("简介")
 //                .jobParameter(random.nextInt(3)>2?"二阶段":"一阶段")
                 .jobParameter("二阶段")
@@ -188,7 +196,7 @@ public class WebController implements CommandLineRunner {
             if (ex.getMessage().endsWith("will never fire.")) {
                 log.warn("创建时便过期,直接触发并删除该任务");
                 try {
-                    JobRegistry.getInstance().getJobScheduleController(jobName).triggerJob();
+                    SpringJobSchedulerEnhance.tryTriggerOnce(jobName);
                 } catch (Exception exc) {
                     log.error(exc);
                 }

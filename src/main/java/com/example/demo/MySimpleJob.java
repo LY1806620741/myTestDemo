@@ -32,12 +32,12 @@ public class MySimpleJob implements SimpleJob, ElasticJobListener {
 
     @Override
     public void execute(ShardingContext shardingContext) {
-        log.info("[{}] execute ",shardingContext.getJobName());
+        log.info("[{}] execute ", shardingContext.getJobName());
 
         try {
             webController.print(shardingContext.getJobName());
         } catch (Exception e) {
-            log.error("未知的错误",e);
+            log.error("未知的错误", e);
         }
     }
 
@@ -48,20 +48,27 @@ public class MySimpleJob implements SimpleJob, ElasticJobListener {
 
     @Override
     public void afterJobExecuted(ShardingContexts shardingContexts) {
-        //TODO afterJobExecuted会在所有集群调用
-        log.info("{} afterJobExecuted ",shardingContexts.getJobName());
+        String taskId = shardingContexts.getTaskId();
+//        afterJobExecuted会在所有集群调用  且调度时间可能不一致 javaSimpleJob4@-@0@-@READY@-@10.100.128.56@-@5996
+        if (taskId.contains(JobRegistry.getInstance().getJobInstance(shardingContexts.getJobName()).getJobInstanceId())) {
 
-        if (shardingContexts.getJobParameter().startsWith("二")){
-//        if (shardingContexts.getJobParameter().startsWith("二")&&random.nextInt(10)>5){
-                String cron = getCron(Date.from(Instant.now().plus(random.nextInt(10)+2, ChronoUnit.SECONDS)));
-            log.info("{} 进入二阶段 下次调度 {} ",shardingContexts.getJobName(),cron);
-            String id = shardingContexts.getJobName().replace("javaSimpleJob", "");
+            log.info("{} afterJobExecuted ", shardingContexts.getJobName());
+
+//            if (shardingContexts.getJobParameter().startsWith("二")) {
+        if (shardingContexts.getJobParameter().startsWith("二")&&random.nextInt(10)>5){
+                String cron = getCron(Date.from(Instant.now().plus(random.nextInt(10) + 2, ChronoUnit.SECONDS)));
+                log.info("{} 进入二阶段 下次调度 {} ", shardingContexts.getJobName(), cron);
+                String id = shardingContexts.getJobName().replace("javaSimpleJob", "");
 //            webController.start(Integer.valueOf(id)); com.dangdang.ddframe.job.executor.JobFacade.failoverIfNecessary
-            JobRegistry.getInstance().getJobScheduleController(shardingContexts.getJobName()).rescheduleJob(cron);
-        }else {
-            log.info("{} 任务结束后删除自身",shardingContexts.getJobName());
-            JobRegistry.getInstance().shutdown(shardingContexts.getJobName());
+                JobRegistry.getInstance().getJobScheduleController(shardingContexts.getJobName()).rescheduleJob(cron);
+            } else {
+                log.info("{} 任务结束后删除自身", shardingContexts.getJobName());
+                JobRegistry.getInstance().shutdown(shardingContexts.getJobName());
                 regCenter.remove("/" + shardingContexts.getJobName()); //如果在任务执行里删除，后面elasticJob再清除自身节点时因为路径不存在会异常
+            }
+        }else{
+            log.info("{} afterJobExecuted 非当前集群,忽略 {}",shardingContexts.getJobName(),shardingContexts.getTaskId());
         }
+
     }
 }
