@@ -5,11 +5,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.dangdang.ddframe.job.config.JobCoreConfiguration;
 import com.dangdang.ddframe.job.config.simple.SimpleJobConfiguration;
 import com.dangdang.ddframe.job.lite.config.LiteJobConfiguration;
-import com.dangdang.ddframe.job.lite.internal.config.ConfigurationService;
 import com.dangdang.ddframe.job.lite.internal.schedule.JobRegistry;
-import com.dangdang.ddframe.job.lite.internal.schedule.JobScheduleController;
-import com.dangdang.ddframe.job.lite.internal.schedule.LiteJobFacade;
-import com.dangdang.ddframe.job.lite.internal.schedule.SchedulerFacade;
 import com.dangdang.ddframe.job.lite.spring.api.SpringJobScheduler;
 import com.dangdang.ddframe.job.reg.base.CoordinatorRegistryCenter;
 import lombok.extern.log4j.Log4j2;
@@ -18,12 +14,12 @@ import org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.curator.framework.recipes.cache.PathChildrenCache;
 import org.apache.curator.framework.recipes.cache.PathChildrenCacheListener;
 import org.apache.zookeeper.data.Stat;
-import org.quartz.*;
+import org.quartz.Scheduler;
+import org.quartz.SchedulerException;
 import org.quartz.impl.matchers.GroupMatcher;
-import org.quartz.spi.OperableTrigger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
-import org.springframework.util.ReflectionUtils;
+import org.springframework.util.Assert;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
@@ -32,7 +28,10 @@ import reactor.core.publisher.Mono;
 import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.*;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Random;
 import java.util.stream.IntStream;
 
 @RestController
@@ -196,7 +195,7 @@ public class WebController implements CommandLineRunner {
             if (ex.getMessage().endsWith("will never fire.")) {
                 log.warn("创建时便过期,直接触发并删除该任务");
                 try {
-                    SpringJobSchedulerEnhance.tryTriggerOnce(jobName);
+                    Assert.isTrue(SpringJobSchedulerEnhance.tryTriggerOnce(jobName),"增强触发失败");
                 } catch (Exception exc) {
                     log.error(exc);
                 }
